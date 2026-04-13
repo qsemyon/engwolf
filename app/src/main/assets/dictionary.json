@@ -1,5 +1,5 @@
-{
-  "apple": "яблоко",
-  "dog": "собака",
-  "cat": "кот"
-}
+[
+  {"word": "apple", "translation": "яблоко"},
+  {"word": "dog", "translation": "собака"},
+  {"word": "cat", "translation": "кот"}
+]
