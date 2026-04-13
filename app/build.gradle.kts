@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id("com.google.devtools.ksp") // Оставляем KSP для Room
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -11,13 +11,12 @@ android {
 
     defaultConfig {
         applicationId = "com.example.engwolf"
-        minSdk = 36 // Рекомендую снизить до 26, если хочешь, чтобы работало не только на эмуляторе 2026 года
+        minSdk = 36
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
 
-    // Это заменяет старые compileOptions и фиксит ошибку JVM Target
     kotlin {
         jvmToolchain(21)
     }
@@ -32,7 +31,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
 
-    // Compose
     implementation(platform(libs.androidx.compose.bom))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
