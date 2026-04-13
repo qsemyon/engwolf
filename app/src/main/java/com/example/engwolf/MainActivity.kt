@@ -12,18 +12,43 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import org.json.JSONObject
+import com.example.engwolf.data.WordRepository
+import com.example.engwolf.data.local.AppDatabase
+import com.example.engwolf.data.local.WordEntity
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val db = AppDatabase.getDatabase(applicationContext)
+        val repository = WordRepository(db.wordDao(), applicationContext)
+
         setContent {
             MaterialTheme {
                 val navController = rememberNavController()
-                NavHost(navController = navController, startDestination = "first") {
-                    composable("first") { FirstScreen { navController.navigate("second") } }
-                    composable("second") { SecondScreen() }
+                val scope = rememberCoroutineScope()
+
+                LaunchedEffect(Unit) {
+                    repository.checkAndPrepopulate("A1")
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    NavHost(navController = navController, startDestination = "first") {
+                        composable("first") {
+                            FirstScreen(repository = repository, onNavigate = { navController.navigate("second") })
+                        }
+                        composable("second") {
+                            SecondScreen(
+                                repository = repository,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -31,111 +56,146 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun FirstScreen(onNavigate: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Button(onClick = onNavigate) { Text("Начать") }
-    }
-}
-
-fun loadDictionary(context: android.content.Context): Map<String, String> {
-    return try {
-        val jsonString = context.assets.open("dictionary.json").bufferedReader().use { it.readText() }
-        val jsonObject = JSONObject(jsonString)
-        val map = mutableMapOf<String, String>()
-
-        val keys = jsonObject.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            map[key] = jsonObject.getString(key)
+fun FirstScreen(repository: WordRepository, onNavigate: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Button(onClick = onNavigate) {
+            Text("Начать обучение")
         }
-        map
-    } catch (e: Exception) {
-        e.printStackTrace()
-        mapOf("error" to "Файл не найден или кривой JSON")
+        Spacer(Modifier.height(20.dp))
+        TextButton(onClick = {
+            scope.launch {
+                repository.resetAllProgress()
+            }
+        }) {
+            Text("Сбросить весь прогресс")
+        }
     }
 }
 
 @Composable
-fun SecondScreen() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val dictionary = remember { loadDictionary(context) }
+fun SecondScreen(repository: WordRepository, onBack: () -> Unit) {
+    val scope = rememberCoroutineScope()
 
-    val learnedWords = remember { mutableStateListOf<String>() }
-    var resetTime by remember { mutableLongStateOf(0L) }
-
-    val getAvailableWords = { dictionary.keys.filter { it !in learnedWords } }
-
-    var targetWord by remember { mutableStateOf(getAvailableWords().randomOrNull() ?: "") }
+    var currentWord by remember { mutableStateOf<WordEntity?>(null) }
     var textState by remember { mutableStateOf("") }
     var feedback by remember { mutableStateOf("") }
     var showNextButton by remember { mutableStateOf(false) }
 
-    val moveToNext = {
-        textState = ""
-        feedback = ""
-        showNextButton = false
-        targetWord = getAvailableWords().randomOrNull() ?: ""
-    }
+    fun loadNext(excludeId: Int? = null) {
+        scope.launch {
+            val availableWords = repository.getWordsToReview("A1")
 
-    LaunchedEffect(learnedWords.size) {
-        if (learnedWords.size >= 3) {
-            resetTime = System.currentTimeMillis() + 60000
-            delay(60000)
-            learnedWords.clear()
-            moveToNext()
+            val filteredWords = if (excludeId != null) {
+                availableWords.filter { it.id != excludeId }
+            } else {
+                availableWords
+            }
+
+            currentWord = if (filteredWords.isNotEmpty()) {
+                filteredWords.randomOrNull()
+            } else {
+                availableWords.firstOrNull()
+            }
+
+            textState = ""
+            feedback = ""
+            showNextButton = false
         }
     }
 
+    LaunchedEffect(Unit) {
+        loadNext()
+    }
+
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (learnedWords.size >= 3) {
-            Text("Всё выучено", style = MaterialTheme.typography.headlineLarge)
-            val timeLeft = ((resetTime - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-            Text("Слова обновятся через: $timeLeft сек")
-        } else if (targetWord.isNotEmpty()) {
-            Text(text = "Translate: $targetWord", style = MaterialTheme.typography.headlineMedium)
+        TextButton(
+            onClick = onBack,
+            modifier = Modifier.align(Alignment.Start)
+        ) {
+            Text("Назад")
+        }
 
-            Spacer(Modifier.height(16.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            currentWord?.let { word ->
+                Text(
+                    text = "Как переводится: ${word.word}?",
+                    style = MaterialTheme.typography.headlineMedium
+                )
 
-            OutlinedTextField(
-                value = textState,
-                onValueChange = { if (!showNextButton && feedback != "Да") textState = it },
-                label = { Text("Перевод") },
-                singleLine = true
-            )
+                Spacer(modifier = Modifier.height(16.dp))
 
-            Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = textState,
+                    onValueChange = { if (!showNextButton && feedback != "Да") textState = it },
+                    label = { Text("Введи перевод") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            if (feedback.isEmpty()) {
-                Button(onClick = {
-                    val correct = dictionary[targetWord]
-                    if (textState.lowercase().trim() == correct) {
-                        feedback = "Да"
-                    } else {
-                        feedback = "Нет, это слово $correct"
-                        showNextButton = true
+                Spacer(modifier = Modifier.height(24.dp))
+
+                if (feedback.isEmpty()) {
+                    Button(
+                        onClick = {
+                            val isCorrect = textState.lowercase().trim() == word.translation.lowercase().trim()
+                            scope.launch {
+                                if (isCorrect) {
+                                    feedback = "Да"
+                                    repository.updateWordProgress(word, true)
+                                    kotlinx.coroutines.delay(1000)
+                                    loadNext(excludeId = word.id)
+                                } else {
+                                    feedback = "Нет, это слово ${word.translation}"
+                                    repository.updateWordProgress(word, false)
+                                    showNextButton = true
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Проверить")
                     }
-                }) { Text("Проверить") }
-            }
-
-            if (feedback == "Да") {
-                Text(text = feedback, color = androidx.compose.ui.graphics.Color.Green)
-                LaunchedEffect(targetWord) {
-                    delay(1000)
-                    learnedWords.add(targetWord)
-                    moveToNext()
                 }
-            } else if (feedback.isNotEmpty()) {
-                Text(text = feedback, color = androidx.compose.ui.graphics.Color.Red)
-            }
 
-            if (showNextButton) {
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = { moveToNext() }) {
-                    Text("Следующее слово")
+                if (feedback.isNotEmpty()) {
+                    Text(
+                        text = feedback,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (feedback.contains("Да")) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 16.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+
+                if (showNextButton) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { loadNext(excludeId = word.id) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Следующее слово")
+                    }
+                }
+            } ?: Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "На сегодня всё выучено\nВозвращайся позже",
+                    style = MaterialTheme.typography.headlineSmall,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(onClick = { loadNext() }) {
+                    Text("Проверить снова")
                 }
             }
         }
