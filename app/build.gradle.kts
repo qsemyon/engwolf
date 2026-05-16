@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.engwolf"
+    namespace = "com.qsemyon.engwolf"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.engwolf"
+        applicationId = "com.qsemyon.engwolf"
         minSdk = 36
         targetSdk = 36
         versionCode = 1
