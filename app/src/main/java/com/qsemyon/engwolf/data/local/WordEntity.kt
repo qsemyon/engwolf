@@ -1,4 +1,4 @@
-package com.example.engwolf.data.local
+package com.qsemyon.engwolf.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
@@ -10,5 +10,6 @@ data class WordEntity(
     val translation: String,
     val dictionaryName: String,
     var intervalStep: Int = 0,
-    var nextReviewTime: Long = 0
+    var nextReviewTime: Long = 0,
+    var isLearned: Boolean = false
 )

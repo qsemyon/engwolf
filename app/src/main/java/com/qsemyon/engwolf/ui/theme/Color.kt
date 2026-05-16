@@ -1,4 +1,4 @@
-package com.example.engwolf.ui.theme
+package com.qsemyon.engwolf.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

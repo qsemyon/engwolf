@@ -1,10 +1,10 @@
-package com.example.engwolf.data.local
+package com.qsemyon.engwolf.data.local
 
 import androidx.room.*
 
 @Dao
 interface WordDao {
-    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND nextReviewTime <= :currentTime")
+    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND isLearned = 0 AND nextReviewTime <= :currentTime")
     suspend fun getWordsToReview(dictName: String, currentTime: Long): List<WordEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -16,6 +16,10 @@ interface WordDao {
     @Query("SELECT COUNT(*) FROM words WHERE dictionaryName = :dictName")
     suspend fun getCount(dictName: String): Int
 
-    @Query("DELETE FROM words")
-    suspend fun clearAllWords()
+    @Query("""
+        SELECT COUNT(DISTINCT id) FROM words 
+        WHERE dictionaryName = :dict 
+        AND nextReviewTime > :start
+    """)
+    suspend fun getUniqueWordsStudiedToday(dict: String, start: Long): Int
 }
