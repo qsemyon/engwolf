@@ -1,15 +1,21 @@
 package com.qsemyon.engwolf
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
+import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import java.io.InputStream
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
@@ -19,26 +25,38 @@ import androidx.navigation.navArgument
 import com.qsemyon.engwolf.data.WordRepository
 import com.qsemyon.engwolf.data.local.AppDatabase
 import com.qsemyon.engwolf.data.local.WordEntity
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.font.FontWeight
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val db = AppDatabase.getDatabase(applicationContext)
-        val repo = WordRepository(db.wordDao(), applicationContext)
+        val repo = WordRepository(db.wordDao())
+
         setContent {
-            MaterialTheme { AppContent(repo) }
+            com.qsemyon.engwolf.ui.theme.EngwolfTheme {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { AppContent(repo) }
+            }
         }
     }
 }
 
-private var lastClickTime = 0L
+private var isNavigating = false
+
 fun NavController.navigateSafe(route: String) {
-    val now = System.currentTimeMillis()
-    if (now - lastClickTime <= 500) return
-    lastClickTime = now
-    navigate(route)
+    if (isNavigating || currentDestination?.route == route) return
+    isNavigating = true
+    navigate(route) { launchSingleTop = true }
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ isNavigating = false }, 300)
+}
+
+fun NavController.popBackStackSafe() {
+    if (isNavigating || previousBackStackEntry == null) return
+    isNavigating = true
+    popBackStack()
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ isNavigating = false }, 300)
 }
 
 @Composable
@@ -48,26 +66,66 @@ fun AppContent(repo: WordRepository) {
 
     NavHost(navController, "first", Modifier.fillMaxSize()) {
         composable("first") {
-            FirstScreen { navController.navigateSafe("selection") }
+            FirstScreen(
+                onWordsClick = { navController.navigateSafe("selection") },
+                onGrammarClick = { navController.navigateSafe("grammar") },
+                onStatsClick = { navController.navigateSafe("stat") }
+            )
         }
         composable("selection") {
             SelectionScreen(navController)
         }
         composable("quiz/{lvl}", arguments = args) { entry ->
             val lvl = entry.arguments?.getString("lvl") ?: "A1"
-            QuizScreen(repo, lvl) { navController.popBackStack() }
+            QuizScreen(repo, lvl) { navController.popBackStackSafe() }
+        }
+        composable("grammar") {
+            GrammarScreen(
+                onSectionClick = { sectionId -> navController.navigateSafe("grammar_quiz/$sectionId") },
+                onBack = { navController.popBackStackSafe() }
+            )
+        }
+        composable("grammar_quiz/{sectionId}") { entry ->
+            val sectionId = entry.arguments?.getString("sectionId") ?: "1"
+            GrammarQuizScreen(sectionId = sectionId, repo = repo, onBack = { navController.popBackStackSafe() })
+        }
+        composable("stat") {
+            StatisticsScreen(repo = repo, onBack = { navController.popBackStackSafe() })
         }
     }
 }
 
 @Composable
-fun FirstScreen(onNavigate: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Button(
-            onClick = onNavigate,
-            modifier = Modifier.height(50.dp).fillMaxWidth(0.5f)
+fun FirstScreen(onWordsClick: () -> Unit, onGrammarClick: () -> Unit, onStatsClick: () -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Слова", style = MaterialTheme.typography.titleMedium)
+            Button(
+                onClick = onWordsClick,
+                modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 6.dp).height(50.dp)
+            ) {
+                Text("Слова", style = MaterialTheme.typography.titleMedium)
+            }
+            Button(
+                onClick = onGrammarClick,
+                modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 6.dp).height(50.dp)
+            ) {
+                Text("Грамматика", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+
+        Button(
+            onClick = onStatsClick,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp)
+                .fillMaxWidth(0.6f)
+                .height(50.dp)
+        ) {
+            Text("Статистика", style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -75,7 +133,7 @@ fun FirstScreen(onNavigate: () -> Unit) {
 @Composable
 fun SelectionScreen(navController: NavController) {
     Scaffold(
-        topBar = { TopBarBack { navController.popBackStack() } }
+        topBar = { TopBarBack { navController.popBackStackSafe() } }
     ) { padding ->
         SelectionList(Modifier.padding(padding), navController)
     }
@@ -115,16 +173,30 @@ data class QuizUiState(
 
 class QuizViewModel(
     private val repo: WordRepository,
-    private val lvl: String
+    private val lvl: String,
+    private val jsonStreamProvider: () -> InputStream
 ) : ViewModel() {
 
     var state by mutableStateOf(QuizUiState())
         private set
 
     private var isProcessing = false
+    private var showNewWordNext = true
+    private var lastWordId: Int? = null
+
+    private var tickerJob: kotlinx.coroutines.Job? = null
 
     init {
         loadNextWord(initialLoad = true)
+
+        tickerJob = viewModelScope.launch {
+            while (true) {
+                delay(5000)
+                if (state.isLimitReached && state.word == null) {
+                    loadNextWord(initialLoad = false)
+                }
+            }
+        }
     }
 
     fun onTextChange(newText: String) {
@@ -154,7 +226,7 @@ class QuizViewModel(
         if (isCorrect) {
             state = state.copy(feedback = "Правильно", showNextButton = true)
             delay(1000)
-            loadNextWord(initialLoad = false)
+            loadNextWord(false)
             isProcessing = false
             return@launch
         }
@@ -166,25 +238,78 @@ class QuizViewModel(
     private fun loadNextWord(initialLoad: Boolean): kotlinx.coroutines.Job = viewModelScope.launch {
         if (initialLoad) state = state.copy(isLoading = true)
 
-        repo.checkAndPrepopulate(lvl)
-        val limit = !repo.canLearnMore(lvl)
-        val available = repo.getWordsToReview(lvl)
-        val currentId = state.word?.id
-        val next = available.filter { it.id != currentId }.randomOrNull() ?: available.firstOrNull()
+        repo.checkAndPrepopulate(lvl, jsonStreamProvider)
+        val limitReached = !repo.canLearnMore(lvl)
 
-        state = QuizUiState(word = next, isLimitReached = limit, isLoading = false)
+        val newWords = if (!limitReached) repo.getNewWords(lvl) else emptyList()
+        val studyingWords = repo.getStudyingWords(lvl)
+
+        if (limitReached && studyingWords.isEmpty()) {
+            state = QuizUiState(word = null, isLimitReached = true, isLoading = false)
+            return@launch
+        }
+
+        var next: WordEntity? = null
+
+        if (showNewWordNext) {
+            val pool = newWords.filter { it.id != lastWordId }
+            if (pool.isNotEmpty()) {
+                next = pool.randomOrNull()
+                if (studyingWords.isNotEmpty()) {
+                    showNewWordNext = false
+                }
+            }
+        } else {
+            val pool = studyingWords.filter { it.id != lastWordId }
+            if (pool.isNotEmpty()) {
+                next = pool.randomOrNull()
+                showNewWordNext = true
+            }
+        }
 
         if (next == null) {
-            delay(5000)
-            loadNextWord(false)
+            val altPool = if (showNewWordNext) {
+                studyingWords.filter { it.id != lastWordId }
+            } else {
+                newWords.filter { it.id != lastWordId }
+            }
+
+            if (altPool.isNotEmpty()) {
+                next = altPool.randomOrNull()
+            }
         }
+
+        if (next == null) {
+            next = studyingWords.firstOrNull() ?: newWords.firstOrNull()
+        }
+
+        if (next == null) {
+            state = QuizUiState(word = null, isLimitReached = true, isLoading = false)
+            return@launch
+        }
+
+        lastWordId = next.id
+        state = QuizUiState(word = next, isLimitReached = limitReached, isLoading = false)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        tickerJob?.cancel()
     }
 }
 
 @Composable
 fun QuizScreen(repo: WordRepository, lvl: String, onBack: () -> Unit) {
-    val viewModel = remember(lvl) { QuizViewModel(repo, lvl) }
+    val context = LocalContext.current
+    val app = context.applicationContext as android.app.Application
+    val viewModel = remember(lvl) {
+        QuizViewModel(repo, lvl) { app.assets.open("$lvl.json") }
+    }
     val state = viewModel.state
+
+    LaunchedEffect(lvl) {
+        viewModel.onTextChange("")
+    }
 
     Scaffold(topBar = { TopBarBack(onBack) }) { padding ->
         val mod = Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp)
@@ -244,16 +369,314 @@ fun QuizEmptyState(isLimitReached: Boolean) {
             "Пока слов для изучения нет"
         }
         Text(msg, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(24.dp))
-        CircularProgressIndicator()
     }
 }
 
 @Composable
 fun TopBarBack(onBack: () -> Unit) {
     Box(Modifier.fillMaxWidth().padding(top = 12.dp, start = 8.dp)) {
-        TextButton(onClick = onBack, modifier = Modifier.padding(8.dp)) {
+        TextButton(onClick = onBack) {
             Text("← Назад", style = MaterialTheme.typography.titleLarge)
         }
+    }
+}
+
+data class GrammarQuestion(
+    val sectionId: String,
+    val question: String,
+    val options: List<String>,
+    val correctIndex: Int
+)
+
+fun getGrammarQuestionsFromAssets(context: Context, sectionId: String): List<GrammarQuestion> {
+    val result = mutableListOf<GrammarQuestion>()
+
+    val inputStream: InputStream = context.assets.open("grammar.json")
+
+    val jsonString = inputStream.bufferedReader().use { reader ->
+        reader.readText()
+    }
+
+    val jsonArray = JSONArray(jsonString)
+
+    for (i in 0 until jsonArray.length()) {
+        val obj = jsonArray.getJSONObject(i)
+
+        if (obj.getString("sectionId") == sectionId) {
+            val optionsArray = obj.getJSONArray("options")
+            val optionsList = mutableListOf<String>()
+            for (j in 0 until optionsArray.length()) {
+                optionsList.add(optionsArray.getString(j))
+            }
+
+            result.add(
+                GrammarQuestion(
+                    sectionId = obj.getString("sectionId"),
+                    question = obj.getString("question"),
+                    options = optionsList,
+                    correctIndex = obj.getInt("correctIndex")
+                )
+            )
+        }
+    }
+    return result
+}
+
+@Composable
+fun GrammarScreen(onSectionClick: (String) -> Unit, onBack: () -> Unit) {
+    var pads: PaddingValues? = null
+    Scaffold(topBar = { TopBarBack(onBack) }) { pads = it }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(pads ?: PaddingValues()).padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("Выбери раздел грамматики", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 24.dp))
+        val sections = listOf(
+            "1" to "Verb 'To Be'",
+            "2" to "Plural Nouns",
+            "3" to "Present Simple vs Continuous",
+            "4" to "Past Simple"
+        )
+        sections.forEach { (id, name) ->
+            Button(
+                onClick = { onSectionClick(id) },
+                modifier = Modifier.fillMaxWidth().height(55.dp).padding(vertical = 6.dp)
+            ) { Text(name, style = MaterialTheme.typography.titleMedium) }
+        }
+    }
+}
+
+private fun calculateAnswerResult(
+    selectedOption: Int?,
+    activeQuestion: GrammarQuestion?,
+    resultText: String?,
+    onCorrect: () -> Unit,
+    onIncorrect: (String) -> Unit
+) {
+    if (selectedOption == null || activeQuestion == null || resultText != null) return
+
+    val correctIdx = activeQuestion.correctIndex
+    val isCorrect = selectedOption == correctIdx + 1
+
+    if (isCorrect) {
+        onCorrect()
+    } else {
+        val correctText = activeQuestion.options.getOrNull(correctIdx) ?: ""
+        onIncorrect("Неверно, это $correctText")
+    }
+}
+
+@Composable
+fun GrammarQuizScreen(sectionId: String, repo: WordRepository, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var currentQuestion by remember { mutableIntStateOf(1) }
+    var selectedOption by remember { mutableStateOf<Int?>(null) }
+    var resultText by remember { mutableStateOf<String?>(null) }
+    var correctAnswersCount by remember { mutableIntStateOf(0) }
+    var isInitialized by remember { mutableStateOf(false) }
+
+    val questions = remember(sectionId) { getGrammarQuestionsFromAssets(context, sectionId) }
+
+    LaunchedEffect(sectionId) {
+        val (savedQ, savedScore) = repo.getGrammarProgress(sectionId)
+        currentQuestion = savedQ
+        correctAnswersCount = savedScore
+        isInitialized = true
+    }
+
+    if (currentQuestion > 10) {
+        LaunchedEffect(Unit) {
+            repo.saveGrammarResult(sectionId, correctAnswersCount)
+            repo.saveCurrentGrammarStep(sectionId, 1, 0)
+        }
+    }
+
+    if (!isInitialized) return
+    val activeQuestion = questions.getOrNull(currentQuestion - 1)
+
+    val handleNext: () -> Unit = {
+        selectedOption = null
+        resultText = null
+        currentQuestion++
+        coroutineScope.launch {
+            repo.saveCurrentGrammarStep(sectionId, currentQuestion, correctAnswersCount)
+        }
+    }
+
+    val handleCheck: () -> Unit = {
+        calculateAnswerResult(
+            selectedOption = selectedOption,
+            activeQuestion = activeQuestion,
+            resultText = resultText,
+            onCorrect = {
+                resultText = "Правильно"
+                correctAnswersCount++
+                coroutineScope.launch {
+                    delay(1000L)
+                    handleNext()
+                }
+            },
+            onIncorrect = { errorMsg ->
+                resultText = errorMsg
+            }
+        )
+    }
+
+    GrammarQuizUi(
+        sectionId = sectionId,
+        currentQuestion = currentQuestion,
+        activeQuestion = activeQuestion,
+        selectedOption = selectedOption,
+        resultText = resultText,
+        correctAnswersCount = correctAnswersCount,
+        onOptionSelect = { if (resultText == null) selectedOption = it },
+        onCheck = handleCheck,
+        onNext = handleNext,
+        onBack = onBack
+    )
+}
+
+@Composable
+private fun GrammarQuizUi(
+    sectionId: String, currentQuestion: Int, activeQuestion: GrammarQuestion?,
+    selectedOption: Int?, resultText: String?, correctAnswersCount: Int,
+    onOptionSelect: (Int) -> Unit, onCheck: () -> Unit, onNext: () -> Unit, onBack: () -> Unit
+) {
+    Scaffold(topBar = { TopBarBack(onBack) }) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp)) {
+            if (currentQuestion > 10) {
+                Text("Раздел $sectionId завершен", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.align(Alignment.CenterHorizontally))
+                Text("Правильных ответов: $correctAnswersCount из 10", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.align(Alignment.CenterHorizontally))
+                Spacer(Modifier.height(24.dp))
+                Button(onClick = onBack, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Вернуться") }
+            } else {
+                QuizQuestionContent(currentQuestion, activeQuestion, selectedOption, resultText, onOptionSelect, onCheck, onNext)
+            }
+        }
+    }
+}
+
+@Composable
+fun ColumnScope.QuizQuestionContent(
+    currentQuestion: Int,
+    activeQuestion: GrammarQuestion?,
+    selectedOption: Int?,
+    resultText: String?,
+    onOptionSelect: (Int) -> Unit,
+    onCheck: () -> Unit,
+    onNext: () -> Unit
+) {
+    Text(text = "Вопрос $currentQuestion из 10", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.align(Alignment.CenterHorizontally))
+    Spacer(modifier = Modifier.height(24.dp))
+    Text(text = activeQuestion?.question ?: "Загрузка вопроса...", style = MaterialTheme.typography.headlineMedium)
+    Spacer(modifier = Modifier.height(16.dp))
+
+    val options = activeQuestion?.options ?: emptyList()
+    for ((index, optionText) in options.withIndex()) {
+        val optionId = index + 1
+        val isSelected = selectedOption == optionId
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            RadioButton(
+                selected = isSelected,
+                onClick = { onOptionSelect(optionId) },
+                colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary, unselectedColor = MaterialTheme.colorScheme.onSurface)
+            )
+            Text(text = optionText, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp))
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+    Button(
+        onClick = onCheck,
+        enabled = resultText == null && selectedOption != null,
+        modifier = Modifier.fillMaxWidth().height(50.dp)
+    ) {
+        Text("Проверить", style = MaterialTheme.typography.titleMedium)
+    }
+
+    if (resultText != null) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = resultText, style = MaterialTheme.typography.titleLarge, modifier = Modifier.align(Alignment.CenterHorizontally))
+
+        if (resultText != "Правильно") {
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onNext, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                Text("Следующий вопрос")
+            }
+        }
+    }
+}
+
+@Composable
+fun StatisticsScreen(repo: WordRepository, onBack: () -> Unit) {
+    var statsA1 by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
+    var statsA2 by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
+    var statsB1 by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
+    var grammarStats by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+
+    LaunchedEffect(Unit) {
+        statsA1 = repo.getWordsByDictionary("A1")
+        statsA2 = repo.getWordsByDictionary("A2")
+        statsB1 = repo.getWordsByDictionary("B1")
+        grammarStats = repo.getGrammarStats()
+    }
+
+    Scaffold(topBar = { TopBarBack(onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            val levelsData = listOf("A1" to statsA1, "A2" to statsA2, "B1" to statsB1)
+            VocabularyStatsSection(levelsData)
+
+            Text(text = "Статистика тестов:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            GrammarStatsSection(grammarStats)
+        }
+    }
+}
+
+@Composable
+private fun VocabularyStatsSection(levelsData: List<Pair<String, List<WordEntity>>>) {
+    levelsData.forEach { (levelName, words) ->
+        val newWords = words.count { it.intervalStep == 0 && it.nextReviewTime == 0L }
+        val knownWords = words.count { it.intervalStep == 999 }
+        val studyingWords = words.count { it.intervalStep == 0 && it.nextReviewTime > 0L }
+
+        Text(text = "$levelName:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+        Text(text = "Осталось новых слов: $newWords")
+        Text(text = "Известные: $knownWords")
+        Text(text = "Изучаемые: $studyingWords")
+
+        val maxStep = words.filter { it.intervalStep < 999 }.maxOfOrNull { it.intervalStep } ?: 0
+        for (step in 1..maxStep) {
+            val count = words.count { it.intervalStep == step && it.nextReviewTime > 0L && it.nextReviewTime != Long.MAX_VALUE }
+            if (count > 0) {
+                val timesString = if (step % 10 == 1 && step % 100 != 11) "раз" else "раза"
+                Text(text = "  • Повторено $step $timesString: $count")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun GrammarStatsSection(grammarStats: Map<String, Int>) {
+    val sections = listOf(
+        "1" to "Verb 'To Be",
+        "2" to "Plural Nouns",
+        "3" to "Present Simple vs Continuous",
+        "4" to "Past Simple"
+    )
+    sections.forEach { (id, label) ->
+        val correct = grammarStats[id] ?: 0
+        Text(text = "$label: правильно $correct из 10")
     }
 }

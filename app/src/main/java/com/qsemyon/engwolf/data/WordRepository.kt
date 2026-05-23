@@ -1,16 +1,15 @@
 package com.qsemyon.engwolf.data
 
-import android.content.Context
-import android.util.Log
 import com.qsemyon.engwolf.data.local.WordDao
 import com.qsemyon.engwolf.data.local.WordEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.InputStream
 import java.util.Calendar
 
-class WordRepository(private val wordDao: WordDao, private val context: Context) {
+class WordRepository(private val wordDao: WordDao) {
 
     private val intervals = listOf(
         0L,
@@ -23,9 +22,9 @@ class WordRepository(private val wordDao: WordDao, private val context: Context)
         86_400_000L * 30
     )
 
-    suspend fun checkAndPrepopulate(dict: String) = withContext(Dispatchers.IO) {
+    suspend fun checkAndPrepopulate(dict: String, jsonStreamProvider: () -> InputStream) = withContext(Dispatchers.IO) {
         if (wordDao.getCount(dict) > 0) return@withContext
-        val words = loadWordsFromJson(dict, "$dict.json")
+        val words = loadWordsFromStream(dict, jsonStreamProvider)
         if (words.isNotEmpty()) wordDao.insertWords(words)
     }
 
@@ -41,35 +40,44 @@ class WordRepository(private val wordDao: WordDao, private val context: Context)
     }.timeInMillis
 
     suspend fun updateWordProgress(word: WordEntity, isCorrect: Boolean) = withContext(Dispatchers.IO) {
+        val currentTime = System.currentTimeMillis()
+
         if (!isCorrect) {
             word.intervalStep = 0
-            word.nextReviewTime = getStartOfDay() + 1000
+            word.nextReviewTime = currentTime
         } else {
-            val nextStep = if (word.nextReviewTime == 0L || word.nextReviewTime <= getStartOfDay() + 1000) 1 else word.intervalStep + 1
-            word.intervalStep = nextStep.coerceAtMost(intervals.size - 1)
-            word.nextReviewTime = System.currentTimeMillis() + intervals[word.intervalStep]
-            word.isLearned = false
+            if (word.intervalStep == 0 && word.nextReviewTime == 0L) {
+                word.intervalStep = 999
+                word.nextReviewTime = Long.MAX_VALUE
+            } else {
+                val nextStep = if (word.intervalStep == 0) 1 else word.intervalStep + 1
+                if (nextStep >= intervals.size) {
+                    word.intervalStep = 999
+                    word.nextReviewTime = Long.MAX_VALUE
+                } else {
+                    word.intervalStep = nextStep
+                    word.nextReviewTime = currentTime + intervals[word.intervalStep]
+                }
+            }
         }
+        word.isLearned = (word.intervalStep == 999)
         wordDao.updateWord(word)
     }
 
-    suspend fun getWordsToReview(dict: String): List<WordEntity> = withContext(Dispatchers.IO) {
-        val currentTime = System.currentTimeMillis()
-        val allReady = wordDao.getWordsToReview(dict, currentTime)
-
-        if (canLearnMore(dict)) {
-            return@withContext allReady
-        } else {
-            return@withContext allReady.filter { it.nextReviewTime > 0 }
-        }
+    suspend fun getNewWords(dict: String): List<WordEntity> = withContext(Dispatchers.IO) {
+        wordDao.getNewWords(dict)
     }
 
-    private fun loadWordsFromJson(dict: String, fileName: String): List<WordEntity> = try {
-        val json = context.assets.open(fileName).bufferedReader().use { it.readText() }
+    suspend fun getStudyingWords(dict: String): List<WordEntity> = withContext(Dispatchers.IO) {
+        val currentTime = System.currentTimeMillis()
+        wordDao.getStudyingWords(dict).filter { it.nextReviewTime <= currentTime }
+    }
+
+    private fun loadWordsFromStream(dict: String, jsonStreamProvider: () -> InputStream): List<WordEntity> = try {
+        val json = jsonStreamProvider().bufferedReader().use { it.readText() }
         val array = JSONArray(json)
         (0 until array.length()).map { i -> array.getJSONObject(i).toEntity(dict) }
-    } catch (e: Exception) {
-        Log.e("Engwolf", "JSON error in $fileName: ${e.localizedMessage}")
+    } catch (_: Exception) {
         emptyList()
     }
 
@@ -81,4 +89,86 @@ class WordRepository(private val wordDao: WordDao, private val context: Context)
         intervalStep = 0,
         isLearned = false
     )
+
+    suspend fun getWordsByDictionary(dictName: String): List<WordEntity> = withContext(Dispatchers.IO) {
+        wordDao.getWordsByDictionary(dictName)
+    }
+
+    suspend fun getGrammarStats(): Map<String, Int> = withContext(Dispatchers.IO) {
+        val records = wordDao.getWordsByDictionary("grammar_internal_stats")
+        val sectionIds = listOf("1", "2", "3", "4")
+
+        sectionIds.associateWith { id ->
+            val cleanId = id.trim()
+            val finalRecord = records.find { it.word == cleanId }
+            val finalScore = finalRecord?.translation?.toIntOrNull()
+
+            if (finalScore != null) {
+                finalScore
+            } else {
+                val currentScoreRecord = records.find { it.word == "${cleanId}_score" }
+                currentScoreRecord?.translation?.toIntOrNull() ?: 0
+            }
+        }
+    }
+
+    suspend fun getGrammarProgress(sectionId: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val records = wordDao.getWordsByDictionary("grammar_internal_stats")
+        val cleanId = sectionId.trim()
+
+        val qRecord = records.find { it.word == "${cleanId}_current_q" }
+        val scoreRecord = records.find { it.word == "${cleanId}_score" }
+
+        val currentQ = qRecord?.translation?.toIntOrNull() ?: 1
+        val score = scoreRecord?.translation?.toIntOrNull() ?: 0
+
+        Pair(currentQ, score)
+    }
+
+    suspend fun saveGrammarResult(sectionId: String, correctCount: Int) = withContext(Dispatchers.IO) {
+        val cleanId = sectionId.trim()
+        val allRecords = wordDao.getWordsByDictionary("grammar_internal_stats")
+        val existing = allRecords.find { it.word == cleanId }
+
+        if (existing != null) {
+            val currentMax = existing.translation.toIntOrNull() ?: 0
+            if (correctCount > currentMax) {
+                val updated = existing.copy(translation = correctCount.toString())
+                wordDao.updateWord(updated)
+            }
+        } else {
+            val newStat = WordEntity(
+                word = cleanId,
+                translation = correctCount.toString(),
+                dictionaryName = "grammar_internal_stats",
+                nextReviewTime = 0L,
+                intervalStep = 0,
+                isLearned = false
+            )
+            wordDao.insertWords(listOf(newStat))
+        }
+    }
+
+    suspend fun saveCurrentGrammarStep(sectionId: String, currentQuestion: Int, correctCount: Int) = withContext(Dispatchers.IO) {
+        val cleanId = sectionId.trim()
+        val allRecords = wordDao.getWordsByDictionary("grammar_internal_stats")
+
+        val qKey = "${cleanId}_current_q"
+        val scoreKey = "${cleanId}_score"
+
+        val existingQ = allRecords.find { it.word == qKey }
+        val existingScore = allRecords.find { it.word == scoreKey }
+
+        if (existingQ != null) {
+            wordDao.updateWord(existingQ.copy(translation = currentQuestion.toString()))
+        } else {
+            wordDao.insertWords(listOf(WordEntity(word = qKey, translation = currentQuestion.toString(), dictionaryName = "grammar_internal_stats", nextReviewTime = 0L, intervalStep = 0, isLearned = false)))
+        }
+
+        if (existingScore != null) {
+            wordDao.updateWord(existingScore.copy(translation = correctCount.toString()))
+        } else {
+            wordDao.insertWords(listOf(WordEntity(word = scoreKey, translation = correctCount.toString(), dictionaryName = "grammar_internal_stats", nextReviewTime = 0L, intervalStep = 0, isLearned = false)))
+        }
+    }
 }

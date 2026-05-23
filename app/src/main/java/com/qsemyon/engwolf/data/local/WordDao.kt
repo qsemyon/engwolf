@@ -4,10 +4,7 @@ import androidx.room.*
 
 @Dao
 interface WordDao {
-    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND isLearned = 0 AND nextReviewTime <= :currentTime")
-    suspend fun getWordsToReview(dictName: String, currentTime: Long): List<WordEntity>
-
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWords(words: List<WordEntity>)
 
     @Update
@@ -20,6 +17,16 @@ interface WordDao {
         SELECT COUNT(DISTINCT id) FROM words 
         WHERE dictionaryName = :dict 
         AND nextReviewTime > :start
+        AND intervalStep != 999
     """)
     suspend fun getUniqueWordsStudiedToday(dict: String, start: Long): Int
+
+    @Query("SELECT * FROM words WHERE dictionaryName = :dictName")
+    suspend fun getWordsByDictionary(dictName: String): List<WordEntity>
+
+    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND intervalStep = 0 AND nextReviewTime = 0")
+    suspend fun getNewWords(dictName: String): List<WordEntity>
+
+    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND nextReviewTime > 0 AND intervalStep != 999")
+    suspend fun getStudyingWords(dictName: String): List<WordEntity>
 }
