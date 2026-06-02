@@ -58,7 +58,10 @@
 
 ## Развертывание
 
-1. Клонирование репозитория: git clone https://github.com/qsemyon/engwolf
+1. Клонирование репозитория
+```bash
+  git clone https://github.com/qsemyon/engwolf
+```
 2. Импорт проекта в Android Studio
 3. Синхронизация конфигурации Gradle и запуск программы
 
