@@ -342,8 +342,11 @@ fun BoxScope.QuizActiveContent(state: QuizUiState, onTextChange: (String) -> Uni
             value = state.text,
             onValueChange = onTextChange,
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-            placeholder = { Text("Введи перевод") }
+            placeholder = { Text("Введи перевод") },
+            singleLine = true,
+            enabled = !state.showNextButton
         )
+
         Button(
             onClick = onAction,
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).height(50.dp)
