@@ -69,7 +69,28 @@ fun AppContent(repo: WordRepository) {
             FirstScreen(
                 onWordsClick = { navController.navigateSafe("selection") },
                 onGrammarClick = { navController.navigateSafe("grammar") },
-                onStatsClick = { navController.navigateSafe("stat") }
+                onStatsClick = { navController.navigateSafe("stat") },
+                onDictionariesClick = { navController.navigateSafe("dictionaries") }
+            )
+        }
+        composable("dictionaries") {
+            DictionariesSelectionScreen(navController)
+        }
+        composable("dictionary_view/{lvl}") { entry ->
+            val lvl = entry.arguments?.getString("lvl") ?: "A1"
+            DictionaryViewScreen(
+                lvl = lvl,
+                repo = repo,
+                onAddWord = { navController.navigateSafe("add_word/$lvl") },
+                onBack = { navController.popBackStackSafe() }
+            )
+        }
+        composable("add_word/{lvl}") { entry ->
+            val lvl = entry.arguments?.getString("lvl") ?: "A1"
+            AddWordScreen(
+                lvl = lvl,
+                repo = repo,
+                onBack = { navController.popBackStackSafe() }
             )
         }
         composable("selection") {
@@ -104,7 +125,12 @@ fun AppContent(repo: WordRepository) {
 }
 
 @Composable
-fun FirstScreen(onWordsClick: () -> Unit, onGrammarClick: () -> Unit, onStatsClick: () -> Unit) {
+fun FirstScreen(
+    onWordsClick: () -> Unit,
+    onGrammarClick: () -> Unit,
+    onStatsClick: () -> Unit,
+    onDictionariesClick: () -> Unit
+) {
     Box(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.align(Alignment.Center),
@@ -116,6 +142,12 @@ fun FirstScreen(onWordsClick: () -> Unit, onGrammarClick: () -> Unit, onStatsCli
                 modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 6.dp).height(50.dp)
             ) {
                 Text("Слова", style = MaterialTheme.typography.titleMedium)
+            }
+            Button(
+                onClick = onDictionariesClick,
+                modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 6.dp).height(50.dp)
+            ) {
+                Text("Словари", style = MaterialTheme.typography.titleMedium)
             }
             Button(
                 onClick = onGrammarClick,
@@ -745,5 +777,160 @@ private fun GrammarStatsSection(grammarStats: Map<String, Int>) {
     sections.forEach { (id, label) ->
         val correct = grammarStats[id] ?: 0
         Text(text = "$label: правильно $correct из 10")
+    }
+}
+
+@Composable
+fun DictionariesSelectionScreen(navController: NavController) {
+    Scaffold(
+        topBar = { TopBarBack { navController.popBackStackSafe() } }
+    ) { padding ->
+        Column(
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            listOf("A1", "A2", "B1").forEach { level ->
+                Button(
+                    onClick = { navController.navigateSafe("dictionary_view/$level") },
+                    modifier = Modifier.fillMaxWidth(0.7f).padding(vertical = 6.dp).height(50.dp)
+                ) {
+                    Text("Словарь $level", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DictionaryViewScreen(lvl: String, repo: WordRepository, onAddWord: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var words by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
+    var isLoaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(lvl) {
+        delay(600)
+        repo.checkAndPrepopulate(lvl) { context.assets.open("$lvl.json") }
+        words = repo.getWordsByDictionary(lvl).sortedBy { it.word.lowercase() }
+        isLoaded = true
+    }
+
+    Scaffold(
+        topBar = { TopBarBack(onBack) }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Словарь $lvl",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                if (isLoaded) {
+                    words.forEach { wordEntity ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(wordEntity.word, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                            Text(wordEntity.translation, style = MaterialTheme.typography.bodyLarge)
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            }
+
+            Button(
+                onClick = onAddWord,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp)
+                    .height(55.dp)
+            ) {
+                Text("Добавить слово", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+    }
+}
+
+@Composable
+fun AddWordScreen(lvl: String, repo: WordRepository, onBack: () -> Unit) {
+    var wordText by remember { mutableStateOf("") }
+    var translationText by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    Scaffold(topBar = { TopBarBack(onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Добавить слово в $lvl", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 16.dp))
+
+            OutlinedTextField(
+                value = wordText,
+                onValueChange = {
+                    wordText = it
+                    errorMessage = null
+                },
+                label = { Text("Слово на английском") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            )
+
+            OutlinedTextField(
+                value = translationText,
+                onValueChange = {
+                    translationText = it
+                    errorMessage = null
+                },
+                label = { Text("Перевод") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
+            )
+
+            errorMessage?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+
+            Button(
+                onClick = {
+                    if (wordText.isNotBlank() && translationText.isNotBlank()) {
+                        coroutineScope.launch {
+                            val success = repo.addNewWordToDictionary(lvl, wordText.trim(), translationText.trim())
+                            if (success) {
+                                onBack()
+                            } else {
+                                errorMessage = "Такое слово уже есть в словаре"
+                            }
+                        }
+                    }
+                },
+                enabled = wordText.isNotBlank() && translationText.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
+                Text("Сохранить", style = MaterialTheme.typography.titleMedium)
+            }
+        }
     }
 }

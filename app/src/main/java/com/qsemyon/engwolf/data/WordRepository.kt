@@ -94,6 +94,24 @@ class WordRepository(private val wordDao: WordDao) {
         wordDao.getWordsByDictionary(dictName)
     }
 
+    suspend fun addNewWordToDictionary(dictName: String, word: String, translation: String): Boolean = withContext(Dispatchers.IO) {
+        val existingWords = wordDao.getWordsByDictionary(dictName)
+        val alreadyExists = existingWords.any { it.word.equals(word, ignoreCase = true) }
+        if (alreadyExists) {
+            return@withContext false
+        }
+        val entity = WordEntity(
+            word = word,
+            translation = translation,
+            dictionaryName = dictName,
+            nextReviewTime = 0L,
+            intervalStep = 0,
+            isLearned = false
+        )
+        wordDao.insertWords(listOf(entity))
+        true
+    }
+
     suspend fun getGrammarStats(): Map<String, Int> = withContext(Dispatchers.IO) {
         val records = wordDao.getWordsByDictionary("grammar_internal_stats")
         val sectionIds = listOf("1", "2", "3", "4")
