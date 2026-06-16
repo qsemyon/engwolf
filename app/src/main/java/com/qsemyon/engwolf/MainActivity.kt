@@ -81,7 +81,15 @@ fun AppContent(repo: WordRepository) {
         }
         composable("grammar") {
             GrammarScreen(
-                onSectionClick = { sectionId -> navController.navigateSafe("grammar_quiz/$sectionId") },
+                onSectionClick = { sectionId -> navController.navigateSafe("grammar_info/$sectionId") },
+                onBack = { navController.popBackStackSafe() }
+            )
+        }
+        composable("grammar_info/{sectionId}") { entry ->
+            val sectionId = entry.arguments?.getString("sectionId") ?: "1"
+            GrammarInfoScreen(
+                sectionId = sectionId,
+                onStartQuiz = { navController.navigateSafe("grammar_quiz/$sectionId") },
                 onBack = { navController.popBackStackSafe() }
             )
         }
@@ -126,6 +134,62 @@ fun FirstScreen(onWordsClick: () -> Unit, onGrammarClick: () -> Unit, onStatsCli
                 .height(50.dp)
         ) {
             Text("Статистика", style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+fun getArticleFromAssets(context: Context, sectionId: String): String {
+    return try {
+        val inputStream = context.assets.open("articles.json")
+        val jsonString = inputStream.bufferedReader().use { it.readText() }
+        val jsonArray = JSONArray(jsonString)
+        for (i in 0 until jsonArray.length()) {
+            val obj = jsonArray.getJSONObject(i)
+            if (obj.getString("sectionId") == sectionId) {
+                return obj.getString("text")
+            }
+        }
+        "Статья не найдена"
+    } catch (_: Exception) {
+        "Ошибка загрузки"
+    }
+}
+
+@Composable
+fun GrammarInfoScreen(sectionId: String, onStartQuiz: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val articleText = remember(sectionId) { getArticleFromAssets(context, sectionId) }
+
+    Scaffold(topBar = { TopBarBack(onBack) }) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text(
+                    text = articleText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+            Button(
+                onClick = onStartQuiz,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(55.dp)
+            ) {
+                Text("Тест", style = MaterialTheme.typography.titleMedium)
+            }
         }
     }
 }
