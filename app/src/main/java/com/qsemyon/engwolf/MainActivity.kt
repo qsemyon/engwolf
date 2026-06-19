@@ -805,14 +805,50 @@ fun DictionariesSelectionScreen(navController: NavController) {
 @Composable
 fun DictionaryViewScreen(lvl: String, repo: WordRepository, onAddWord: () -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
     var words by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
     var isLoaded by remember { mutableStateOf(false) }
 
+    // Текст в поле поиска
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Слово, которое сейчас редактируем (если null — диалог закрыт)
+    var wordToEdit by remember { mutableStateOf<WordEntity?>(null) }
+
+    // Функция перезагрузки списка с учётом поискового запроса
+    fun reloadWords() {
+        coroutineScope.launch {
+            words = repo.searchDictionary(lvl, searchQuery).sortedBy { it.word.lowercase() }
+        }
+    }
+
+    // Первичная загрузка словаря
     LaunchedEffect(lvl) {
         delay(600)
         repo.checkAndPrepopulate(lvl) { context.assets.open("$lvl.json") }
         words = repo.getWordsByDictionary(lvl).sortedBy { it.word.lowercase() }
         isLoaded = true
+    }
+
+    // Каждый раз, когда меняется текст поиска — обновляем список
+    LaunchedEffect(searchQuery) {
+        if (isLoaded) reloadWords()
+    }
+
+    // Диалог редактирования слова
+    wordToEdit?.let { word ->
+        EditWordDialog(
+            word = word,
+            onDismiss = { wordToEdit = null },
+            onSave = { newWord, newTranslation ->
+                coroutineScope.launch {
+                    repo.updateWordLocally(word.copy(word = newWord, translation = newTranslation))
+                    wordToEdit = null
+                    reloadWords()
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -829,25 +865,75 @@ fun DictionaryViewScreen(lvl: String, repo: WordRepository, onAddWord: () -> Uni
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
             ) {
                 Text(
                     text = "Словарь $lvl",
                     style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    modifier = Modifier.padding(bottom = 12.dp)
                 )
-                if (isLoaded) {
-                    words.forEach { wordEntity ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(wordEntity.word, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                            Text(wordEntity.translation, style = MaterialTheme.typography.bodyLarge)
+
+                // Поле поиска
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Поиск слова") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                )
+
+                // Список слов
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (isLoaded) {
+                        if (words.isEmpty()) {
+                            Text(
+                                text = "Ничего не найдено",
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
                         }
-                        HorizontalDivider()
+                        words.forEach { wordEntity ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        wordEntity.word,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        wordEntity.translation,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                                Row {
+                                    // Кнопка редактирования
+                                    TextButton(onClick = { wordToEdit = wordEntity }) {
+                                        Text("✎")
+                                    }
+                                    // Кнопка удаления
+                                    TextButton(onClick = {
+                                        coroutineScope.launch {
+                                            repo.deleteWordLocally(wordEntity)
+                                            reloadWords()
+                                        }
+                                    }) {
+                                        Text("✕", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                            HorizontalDivider()
+                        }
                     }
                 }
             }
@@ -863,6 +949,54 @@ fun DictionaryViewScreen(lvl: String, repo: WordRepository, onAddWord: () -> Uni
             }
         }
     }
+}
+
+@Composable
+fun EditWordDialog(
+    word: WordEntity,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var newWord by remember { mutableStateOf(word.word) }
+    var newTranslation by remember { mutableStateOf(word.translation) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Редактировать слово") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = newWord,
+                    onValueChange = { newWord = it },
+                    label = { Text("Слово") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                )
+                OutlinedTextField(
+                    value = newTranslation,
+                    onValueChange = { newTranslation = it },
+                    label = { Text("Перевод") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(newWord.trim(), newTranslation.trim()) },
+                enabled = newWord.isNotBlank() && newTranslation.isNotBlank()
+            ) {
+                Text("Сохранить")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена")
+            }
+        }
+    )
 }
 
 @Composable

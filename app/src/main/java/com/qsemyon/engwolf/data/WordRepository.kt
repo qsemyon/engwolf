@@ -189,4 +189,20 @@ class WordRepository(private val wordDao: WordDao) {
             wordDao.insertWords(listOf(WordEntity(word = scoreKey, translation = correctCount.toString(), dictionaryName = "grammar_internal_stats", nextReviewTime = 0L, intervalStep = 0, isLearned = false)))
         }
     }
+
+    suspend fun updateWordLocally(word: WordEntity) {
+        wordDao.updateWord(word)
+    }
+
+    suspend fun deleteWordLocally(word: WordEntity) {
+        wordDao.deleteWord(word)
+    }
+
+    suspend fun searchDictionary(dictName: String, query: String): List<WordEntity> {
+        return if (query.isBlank()) {
+            wordDao.getWordsByDictionary(dictName)
+        } else {
+            wordDao.searchWordsInDictionary(dictName, query)
+        }
+    }
 }

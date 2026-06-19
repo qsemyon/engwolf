@@ -29,4 +29,10 @@ interface WordDao {
 
     @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND nextReviewTime > 0 AND intervalStep != 999")
     suspend fun getStudyingWords(dictName: String): List<WordEntity>
+
+    @Delete
+    suspend fun deleteWord(word: WordEntity)
+
+    @Query("SELECT * FROM words WHERE dictionaryName = :dictName AND (word LIKE '%' || :searchQuery || '%' OR translation LIKE '%' || :searchQuery || '%')")
+    suspend fun searchWordsInDictionary(dictName: String, searchQuery: String): List<WordEntity>
 }
