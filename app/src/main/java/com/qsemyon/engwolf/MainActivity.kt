@@ -309,14 +309,26 @@ class QuizViewModel(
             loadNextWord(initialLoad = false)
             return
         }
-        val target = state.word?.translation?.trim().orEmpty()
-        val isCorrect = state.text.trim().equals(target, ignoreCase = true)
 
-        if (state.text.isBlank()) {
+        val userInput = state.text.trim()
+        if (userInput.isBlank()) {
             state = state.copy(feedback = "Введи слово")
             return
         }
-        processAnswer(isCorrect, target)
+
+        val targetRaw = state.word?.translation.orEmpty()
+        val targets = targetRaw
+            .replace("[", "")
+            .replace("]", "")
+            .replace("\"", "")
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val isCorrect = targets.any { it.equals(userInput, ignoreCase = true) }
+        val displayTarget = targets.joinToString(", ")
+
+        processAnswer(isCorrect, displayTarget)
     }
 
     private fun processAnswer(isCorrect: Boolean, target: String): kotlinx.coroutines.Job = viewModelScope.launch {

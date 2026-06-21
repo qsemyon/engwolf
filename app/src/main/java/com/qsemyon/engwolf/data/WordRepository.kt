@@ -81,14 +81,21 @@ class WordRepository(private val wordDao: WordDao) {
         emptyList()
     }
 
-    private fun JSONObject.toEntity(dict: String) = WordEntity(
-        word = getString("word"),
-        translation = getString("translation"),
-        dictionaryName = dict,
-        nextReviewTime = 0,
-        intervalStep = 0,
-        isLearned = false
-    )
+    private fun JSONObject.toEntity(dict: String): WordEntity {
+        val translationArray = getJSONArray("translation")
+        val translations = mutableListOf<String>()
+        for (i in 0 until translationArray.length()) {
+            translations.add(translationArray.getString(i))
+        }
+        return WordEntity(
+            word = getString("word"),
+            translation = translations.joinToString(", "),
+            dictionaryName = dict,
+            nextReviewTime = 0,
+            intervalStep = 0,
+            isLearned = false
+        )
+    }
 
     suspend fun getWordsByDictionary(dictName: String): List<WordEntity> = withContext(Dispatchers.IO) {
         wordDao.getWordsByDictionary(dictName)
