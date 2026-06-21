@@ -915,6 +915,17 @@ private fun WordRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val cleanTranslation = remember(word.translation) {
+        word.translation
+            .replace("[", "")
+            .replace("]", "")
+            .replace("\"", "")
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -922,7 +933,7 @@ private fun WordRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(word.word, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-            Text(word.translation, style = MaterialTheme.typography.bodyMedium)
+            Text(cleanTranslation, style = MaterialTheme.typography.bodyMedium)
         }
         Row {
             TextButton(onClick = onEdit) { Text("✎") }
@@ -1024,8 +1035,19 @@ fun EditWordDialog(
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit
 ) {
+    val cleanTranslation = remember(word.translation) {
+        word.translation
+            .replace("[", "")
+            .replace("]", "")
+            .replace("\"", "")
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
+    }
+
     var newWord by remember { mutableStateOf(word.word) }
-    var newTranslation by remember { mutableStateOf(word.translation) }
+    var newTranslation by remember { mutableStateOf(cleanTranslation) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1100,7 +1122,7 @@ fun AddWordScreen(lvl: String, repo: WordRepository, onBack: () -> Unit) {
                     translationText = it
                     errorMessage = null
                 },
-                label = { Text("Перевод") },
+                label = { Text("Перевод (можно несколько через запятую)") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)
             )

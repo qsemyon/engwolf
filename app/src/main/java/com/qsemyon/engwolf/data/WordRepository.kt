@@ -103,13 +103,20 @@ class WordRepository(private val wordDao: WordDao) {
 
     suspend fun addNewWordToDictionary(dictName: String, word: String, translation: String): Boolean = withContext(Dispatchers.IO) {
         val existingWords = wordDao.getWordsByDictionary(dictName)
-        val alreadyExists = existingWords.any { it.word.equals(word, ignoreCase = true) }
+        val alreadyExists = existingWords.any { it.word.equals(word.trim(), ignoreCase = true) }
         if (alreadyExists) {
             return@withContext false
         }
+
+        val normalizedTranslation = translation
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(", ")
+
         val entity = WordEntity(
-            word = word,
-            translation = translation,
+            word = word.trim(),
+            translation = normalizedTranslation,
             dictionaryName = dictName,
             nextReviewTime = 0L,
             intervalStep = 0,
